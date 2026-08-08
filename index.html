@@ -15213,6 +15213,25 @@ function applyPrivateDealerData(data){
     ["ProgramID", "PaymentOptionID"]
   );
 
+ state.paymentOptions.forEach(program => {
+
+    const rawAPR = money(program.APR);
+
+    if(rawAPR > 0 && rawAPR < 1){
+      program.APR =
+        Number((rawAPR * 100).toFixed(2));
+    }
+
+    const rawDealerFee =
+      money(program.DealerFeePercent);
+
+    if(rawDealerFee > 0 && rawDealerFee < 1){
+      program.DealerFeePercent =
+        Number((rawDealerFee * 100).toFixed(2));
+    }
+
+  });
+  
   mergePrivateRows(
     state.bidFleet,
     privateDealerRows(data, "bid-fleet-programs"),
