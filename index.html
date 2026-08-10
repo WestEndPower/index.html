@@ -11047,7 +11047,23 @@ function currentQuoteTotal(){
 }
 
 function financingApplies(program){
-  const tool = state.selectedTool;
+
+  /*
+    Cart financing follows the first primary
+    equipment item in the quote—not the last
+    product viewed in the selector.
+  */
+  const primaryCartTool =
+    state.cart.find(line =>
+      line.type === 'tool' &&
+      !line.requiredItem &&
+      !line.included
+    );
+
+  const tool =
+    primaryCartTool?.item ||
+    state.selectedTool;
+
   if(!tool) return false;
 
   if(!isDateActive(program.StartDate, program.EndDate)){
@@ -12978,13 +12994,37 @@ function addRequiredItems(parentItem, parentQty){
 }
 
     function removeCart(key){
-  const parent = state.cart.find(x => x.key === key);
-  const parentSku = parent ? skuOf(parent.item) : '';
 
-  state.cart = state.cart.filter(x =>
-    x.key !== key &&
-    x.parentSku !== parentSku
-  );
+  const parent =
+    state.cart.find(
+      line => line.key === key
+    );
+
+  const parentSku =
+    parent
+      ? skuOf(parent.item)
+      : '';
+
+  state.cart =
+    state.cart.filter(line =>
+      line.key !== key &&
+      line.parentSku !== parentSku
+    );
+
+  /*
+    Financing eligibility follows the remaining
+    primary tool after an item is removed.
+  */
+  const remainingToolLine =
+    state.cart.find(line =>
+      line.type === 'tool' &&
+      !line.requiredItem &&
+      !line.included
+    );
+
+  state.selectedTool =
+    remainingToolLine?.item ||
+    null;
 
   renderDeliveryOptions();
   renderCart();
