@@ -11239,6 +11239,12 @@ rebateEndDate: rebateEndDate(),
     selectedTool: state.selectedTool ? nameOf(state.selectedTool) : '',
     items: state.cart.map(line => ({
       qty: line.qty,
+      sku:
+        clean(line.item?.StihlID) ||
+        clean(line.item?.STIHLID) ||
+        clean(line.item?.['STIHL ID']) ||
+        skuOf(line.item),
+      model: clean(line.item?.Model),
       name: nameOf(line.item),
       price: line.included ? 'Included' : fmtMoney(priceOf(line.item)),
       lineTotal: line.included
