@@ -8286,6 +8286,127 @@ async function printSalesSheet(dealerWorksheet = false){
 
   const quoteNumber = createQuoteNumber('STIHL');
 
+  /*
+    Preserve the exact customer-facing quote calculation with the saved lead.
+    The dashboard must not reconstruct discounts by proportionally scaling the
+    cart to the final subtotal; doing so loses setup/freight and invents item
+    discounts that were never shown in the configurator.
+  */
+  const savedSourceLines =
+    state.cart.filter(line => line && line.item && !line.included);
+  const savedProductSubtotal =
+    savedSourceLines.reduce((sum, line) => {
+      const qty = Number(line.qty) || 1;
+      return sum + (
+        line.requiredItem
+          ? priceOf(line.item) * qty
+          : lineTotal(line)
+      );
+    }, 0);
+  const savedGrossSubtotal =
+    savedProductSubtotal +
+    setupFee() +
+    deliveryFee() +
+    freightFee() +
+    warrantyAmount();
+  const savedManualCustomerDiscount =
+    dealerDiscountAmount(savedGrossSubtotal);
+  const savedBidFleet = bidFleetEngine();
+  const savedBidFleetActive =
+    savedBidFleet.eligible === true &&
+    !!savedBidFleet.program &&
+    ['fleet', 'bid'].includes(
+      clean(savedBidFleet.program.ProgramType).toLowerCase()
+    );
+
+  const savedQuoteLines =
+    savedSourceLines
+      .map(line => {
+        const qty = Number(line.qty) || 1;
+        const originalLineTotal = line.requiredItem
+          ? priceOf(line.item) * qty
+          : lineTotal(line);
+        const paymentDiscount = westEndPowerDiscountForLine(line);
+        const factoryRebate = lineActiveCustomerRebate(line);
+        const manualCustomerDiscount =
+          savedProductSubtotal > 0
+            ? savedManualCustomerDiscount *
+              (originalLineTotal / savedProductSubtotal)
+            : 0;
+        const bidFleetDiscount = savedBidFleetActive
+          ? money(
+              bidFleetDiscountForLine(
+                line,
+                savedBidFleet.program,
+                savedBidFleet.tier
+              ).customerDiscount
+            )
+          : 0;
+        const totalDiscount =
+          paymentDiscount +
+          factoryRebate +
+          manualCustomerDiscount +
+          bidFleetDiscount;
+
+        return {
+          type: line.type,
+          qty,
+          included: false,
+          setupSelected: !!line.setupSelected,
+          item: line.item,
+          sku:
+            clean(line.item?.StihlID) ||
+            clean(line.item?.STIHLID) ||
+            clean(line.item?.['STIHL ID']) ||
+            skuOf(line.item),
+          model: clean(line.item?.Model),
+          originalLineTotal,
+          paymentDiscount,
+          factoryRebate,
+          manualCustomerDiscount,
+          bidFleetDiscount,
+          bidFleetProgramType: clean(savedBidFleet.program?.ProgramType).toLowerCase(),
+          bidFleetTier: clean(savedBidFleet.tier),
+          bidFleetProgramName: clean(savedBidFleet.program?.ProgramName),
+          totalDiscount,
+          finalLineTotal: Math.max(
+            originalLineTotal - totalDiscount,
+            0
+          )
+        };
+      });
+
+  const savedEquipmentSubtotal =
+    savedQuoteLines.reduce(
+      (sum, line) => sum + money(line.finalLineTotal),
+      0
+    );
+
+  const savedFreightSummary = freightSummary();
+  const savedFactoryFreight =
+    savedFreightSummary.rows
+      .filter(row => freightKey(row.applyWhen) === 'ALLSALES')
+      .reduce((sum, row) => sum + money(row.amount), 0);
+  const savedSpecialOrderFreight =
+    savedFreightSummary.rows
+      .filter(row => freightKey(row.applyWhen) === 'NOTINSTOCK')
+      .reduce((sum, row) => sum + money(row.amount), 0);
+  const savedFreightTotal =
+    savedFactoryFreight + savedSpecialOrderFreight;
+  const savedFreightLabel =
+    savedFactoryFreight > 0 && savedSpecialOrderFreight > 0
+      ? 'Factory & Special Order Freight'
+      : savedSpecialOrderFreight > 0
+        ? 'Special Order Freight'
+        : 'Factory Freight';
+
+  const savedOrderTotal = money($('stihl-total')?.textContent);
+  const savedPaymentSplit = paymentEngine(savedOrderTotal);
+  const savedFinanceProgram = selectedCustomerFinanceProgram();
+  const savedFinanceAnalysis = savedFinanceProgram
+    ? financeAnalysis(savedFinanceProgram, savedPaymentSplit.financeAmount)
+    : null;
+
 const quoteDateValue = new Date();
 const quoteDate = quoteDateValue.toLocaleDateString();
 
@@ -11232,6 +11353,57 @@ rebateEndDate: rebateEndDate(),
   .join(' | '),
     
     payment: clean($('stihl-financing-select')?.value),
+    paymentDetails: {
+      cash: savedPaymentSplit.cashAmount,
+      credit: savedPaymentSplit.creditAmount,
+      amountDueToday: savedPaymentSplit.amountDueToday,
+      requiredDown: savedPaymentSplit.minimumDown,
+      financed: savedPaymentSplit.financeAmount,
+      program: savedFinanceProgram ? clean(savedFinanceProgram.Label) : '',
+      monthlyPayment: savedFinanceAnalysis ? savedFinanceAnalysis.payment : 0,
+      applicationFee: savedFinanceProgram
+        ? money(savedFinanceProgram.ApplicationFee)
+        : 0,
+      principalWithFees: savedFinanceAnalysis
+        ? savedFinanceAnalysis.principalFinanced
+        : savedPaymentSplit.financeAmount,
+      totalPayback: savedFinanceAnalysis && savedFinanceProgram
+        ? savedFinanceAnalysis.payment * (Number(savedFinanceProgram.TermMonths) || 0)
+        : 0,
+      termMonths: savedFinanceProgram
+        ? Number(savedFinanceProgram.TermMonths) || 0
+        : 0
+    },
+    customerDetails: {
+      contactName: clean($('stihl-customer-name')?.value),
+      street: clean($('stihl-street-address')?.value),
+      city: clean($('stihl-city')?.value),
+      state: clean($('stihl-state')?.value),
+      zip: clean($('stihl-zip')?.value)
+    },
+    lines: savedQuoteLines,
+    totals: {
+      equipmentSubtotal: savedEquipmentSubtotal,
+      freight: {
+        label: savedFreightLabel,
+        factoryAmount: savedFactoryFreight,
+        specialOrderAmount: savedSpecialOrderFreight,
+        total: savedFreightTotal,
+        details: savedFreightSummary.rows.map(row => ({
+          label: clean(row.label) || 'Freight / Surcharge',
+          amount: money(row.amount),
+          applyWhen: clean(row.applyWhen)
+        }))
+      },
+      setupInstallation: setupFee(),
+      delivery: deliveryFee(),
+      deliveryDescription: deliveryLabel(),
+      extendedWarranty: warrantyAmount(),
+      tradeAllowance: tradeAllowance(),
+      taxExempt: $('stihl-tax-exempt')?.checked === true,
+      salesTax: money($('stihl-tax')?.textContent),
+      outTheDoor: savedOrderTotal
+    },
     notes: clean($('stihl-quote-notes')?.value),
     subtotal: $('stihl-subtotal')?.textContent,
     tax: $('stihl-tax')?.textContent,
@@ -13688,6 +13860,7 @@ const linePaymentDiscount =
 const packageFinalPrice =
   Math.max(
     packageTotal -
+    setupAmount -
     packageCustomerRebate -
     linePaymentDiscount,
     0
