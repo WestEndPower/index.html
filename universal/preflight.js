@@ -81,6 +81,8 @@ const requiredIndexMarkers = [
   'https://www.googletagmanager.com/gtag/js?id=G-B7KTECFBFB',
   'id="stihl-view-quote"',
   'function printRuntimeChart(){',
+  'autocomplete="off"',
+  "searchInput.value = '';",
   'Print Runtime Chart',
   'fallbackBrandId + \'ATTACHMENT\'',
   'fallbackBrandId + \'ACCESSORY\''
