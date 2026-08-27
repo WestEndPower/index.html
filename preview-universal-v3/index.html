@@ -730,7 +730,11 @@ body.dealer-mode .dealer-only{
     <label for="stihl-search">
   Search Models, SKUs, or Keywords
 </label>
-    <input id="stihl-search" type="search" placeholder="Enter a model, SKU, or keyword..." />
+    <input id="stihl-search"
+       type="search"
+       value=""
+       autocomplete="off"
+       placeholder="Enter a model, SKU, or keyword..." />
   </div>
 </div>
 
@@ -21013,6 +21017,11 @@ function bindDealerMode(){
 }
     async function startConfigurator(){
 
+  const searchInput = $('stihl-search');
+
+  if(searchInput){
+    searchInput.value = '';
+  }
   const startupStatus =
     $('stihl-load-status');
 
