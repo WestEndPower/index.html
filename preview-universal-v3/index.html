@@ -734,7 +734,9 @@ body.dealer-mode .dealer-only{
            name="equipment-model-search"
            type="search"
            value=""
-           autocomplete="new-password"
+           autocomplete="one-time-code"
+           data-lpignore="true"
+           data-1p-ignore="true"
            autocapitalize="off"
            spellcheck="false"
            readonly
@@ -21023,14 +21025,33 @@ function bindDealerMode(){
 
     const searchInput = $('stihl-search');
 
-  if(searchInput){
+    if(searchInput){
+    let searchInputActivated = false;
+
+    const rejectSearchAutofill = () => {
+      if(!searchInputActivated && searchInput.value){
+        searchInput.value = '';
+      }
+    };
+
     const activateSearchInput = () => {
+      searchInputActivated = true;
       searchInput.value = '';
       searchInput.removeAttribute('readonly');
     };
 
     searchInput.value = '';
     searchInput.setAttribute('readonly', '');
+
+    searchInput.addEventListener(
+      'input',
+      rejectSearchAutofill
+    );
+
+    searchInput.addEventListener(
+      'change',
+      rejectSearchAutofill
+    );
 
     searchInput.addEventListener(
       'pointerdown',
