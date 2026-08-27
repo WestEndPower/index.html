@@ -79,6 +79,9 @@ const requiredIndexMarkers = [
   'https://westendpower-stripe-checkout.westendpower-nm.workers.dev',
   'https://portal2.apps.stihlusa.com/',
   'https://www.googletagmanager.com/gtag/js?id=G-B7KTECFBFB',
+  'id="stihl-view-quote"',
+  'function printRuntimeChart(){',
+  'Print Runtime Chart',
   'fallbackBrandId + \'ATTACHMENT\'',
   'fallbackBrandId + \'ACCESSORY\''
 ];
