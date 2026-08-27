@@ -610,6 +610,29 @@ body.dealer-mode .dealer-only{
   })();
   </script>
 
+<script
+  async
+  src="https://www.googletagmanager.com/gtag/js?id=G-B7KTECFBFB">
+</script>
+
+<script>
+  window.dataLayer =
+    window.dataLayer || [];
+
+  window.gtag =
+    window.gtag ||
+    function(){
+      window.dataLayer.push(arguments);
+    };
+
+  window.gtag('js', new Date());
+
+  window.gtag(
+    'config',
+    'G-B7KTECFBFB'
+  );
+</script>
+
 </head>
 <body>
   <button
@@ -1303,7 +1326,7 @@ body.dealer-mode .dealer-only{
   gap:8px;
 ">
 
-  <a href="#"
+  <a href="https://portal2.apps.stihlusa.com/"
      target="_blank"
      rel="noopener"
      class="stihl-btn light"
@@ -1676,7 +1699,8 @@ const DATA_FILES =
     const CONFIGURATOR_API =
   "https://westendpower-configurator-api.westendpower-nm.workers.dev";
 
-const STRIPE_CHECKOUT_API = "";
+const STRIPE_CHECKOUT_API =
+  "https://westendpower-stripe-checkout.westendpower-nm.workers.dev";
 
 const batteryCodes = [];
 

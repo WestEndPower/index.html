@@ -76,6 +76,9 @@ const requiredIndexMarkers = [
   'dataProfileApi.getDataFiles(',
   'brandApi.validateBrandProfile(',
   'Universal brand-profile service is unavailable.',
+  'https://westendpower-stripe-checkout.westendpower-nm.workers.dev',
+  'https://portal2.apps.stihlusa.com/',
+  'https://www.googletagmanager.com/gtag/js?id=G-B7KTECFBFB',
   'fallbackBrandId + \'ATTACHMENT\'',
   'fallbackBrandId + \'ACCESSORY\''
 ];
