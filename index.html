@@ -728,13 +728,17 @@ body.dealer-mode .dealer-only{
 <div class="stihl-controls">
   <div>
     <label for="stihl-search">
-  Search Models, SKUs, or Keywords
-</label>
+      Search Models, SKUs, or Keywords
+    </label>
     <input id="stihl-search"
-       type="search"
-       value=""
-       autocomplete="off"
-       placeholder="Enter a model, SKU, or keyword..." />
+           name="equipment-model-search"
+           type="search"
+           value=""
+           autocomplete="new-password"
+           autocapitalize="off"
+           spellcheck="false"
+           readonly
+           placeholder="Enter a model, SKU, or keyword..." />
   </div>
 </div>
 
@@ -21017,10 +21021,28 @@ function bindDealerMode(){
 }
     async function startConfigurator(){
 
-  const searchInput = $('stihl-search');
+    const searchInput = $('stihl-search');
 
   if(searchInput){
+    const activateSearchInput = () => {
+      searchInput.value = '';
+      searchInput.removeAttribute('readonly');
+    };
+
     searchInput.value = '';
+    searchInput.setAttribute('readonly', '');
+
+    searchInput.addEventListener(
+      'pointerdown',
+      activateSearchInput,
+      { once:true }
+    );
+
+    searchInput.addEventListener(
+      'keydown',
+      activateSearchInput,
+      { once:true }
+    );
   }
   const startupStatus =
     $('stihl-load-status');
