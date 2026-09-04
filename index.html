@@ -1824,8 +1824,12 @@ function currentQuoteNumber(){
 }
 
 function clearCurrentQuoteNumber(){
+  const quoteBrand =
+    clean(ACTIVE_BRAND_ID).toUpperCase() ||
+    configuratorBrandId();
+
   sessionStorage.removeItem(
-    `${configuratorBrandId().toLowerCase()}CurrentQuoteNumber`
+    `${quoteBrand.toLowerCase()}CurrentQuoteNumber`
   );
 }
     function isTrue(v){
