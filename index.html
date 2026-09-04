@@ -7295,6 +7295,12 @@ const lineTotalDiscount =
 return {
           type: line.type,
           qty,
+          inventoryId:
+            clean(line.inventoryId),
+          inventorySerial:
+            clean(line.inventoryRecord?.SerialNumber),
+          inventoryStore:
+            clean(line.inventoryRecord?.Store),
           included: !!line.included,
           setupSelected: !!line.setupSelected,
           actualFreightCost:
