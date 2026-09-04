@@ -1728,6 +1728,7 @@ const state = {
   paymentOptions: [],
   bidFleet: [],
   freightRules: [],
+  inventory: [],
   selectedTool: null,
   selectedSystemButton: '',
   selectedPowerButton: '',
@@ -3773,6 +3774,9 @@ function publicPricingCartContext(){
               line.item.SKU
             ),
 
+          inventoryId:
+            clean(line.inventoryId),
+
           quantity:
             Number(line.qty) || 1
         }))
@@ -3908,6 +3912,8 @@ if(!CONFIGURATOR_API){
     const requestBody = {
     brandId:configuratorBrandId(),
       sku,
+      inventoryId:
+        clean(line?.inventoryId),
       quantity:
         Number(line?.qty) || 1,
             taxExempt:
@@ -15113,6 +15119,26 @@ function selectTool(){
   renderDeliveryOptions();
 renderCart();
 }
+function inventorySku(value){
+  return clean(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g,'');
+}
+
+function availableInventoryRecordForSku(sku){
+  const wanted = inventorySku(sku);
+  const used = new Set(
+    state.cart
+      .map(line => clean(line.inventoryId).toUpperCase())
+      .filter(Boolean)
+  );
+
+  return state.inventory.find(record =>
+    inventorySku(record.SKU) === wanted &&
+    !used.has(clean(record.InventoryID).toUpperCase())
+  ) || null;
+}
+
 function addToolToQuote(){
   const sku = clean($('stihl-tool-select').value);
 
@@ -15125,8 +15151,24 @@ function addToolToQuote(){
   if(!tool) return;
 
   const qty = Number($('stihl-tool-qty').value) || 1;
+  const inventoryRecord =
+    availableInventoryRecordForSku(sku);
 
   addItem('tool', tool, qty, '');
+
+  if(inventoryRecord && qty === 1){
+    const line = state.cart.find(candidate =>
+      candidate.type === 'tool' &&
+      skuOf(candidate.item) === sku &&
+      !candidate.included
+    );
+
+    if(line){
+      line.inventoryId =
+        clean(inventoryRecord.InventoryID);
+      line.inventoryRecord = inventoryRecord;
+    }
+  }
 
   addIncludedPackageComponents(tool, qty);
 
@@ -20861,6 +20903,14 @@ function applyPrivateDealerData(data){
     "RuleID",
     ["RuleID"]
   );
+
+  state.inventory =
+    privateDealerRows(data, "inventory")
+      .filter(record =>
+        clean(record.InventoryID) &&
+        clean(record.SKU) &&
+        clean(record.Status).toUpperCase() === "IN STOCK"
+      );
 }
 
 
