@@ -2211,6 +2211,16 @@ function lineDealerCost(line){
     return money(line.replacementDealerCostAdjustment);
   }
 
+  const inventoryActualCost =
+    clean(line.inventoryRecord?.ActualCost);
+
+  if(clean(line.inventoryId) && inventoryActualCost !== ''){
+    return (
+      money(inventoryActualCost) *
+      (Number(line.qty) || 1)
+    );
+  }
+
   const qty =
     Number(line.qty) || 1;
 
@@ -2250,6 +2260,13 @@ function lineAdvertisingFee(line){
     line.included
   ){
     return 0;
+  }
+
+  if(clean(line.inventoryId)){
+    return (
+      money(line.inventoryRecord?.InboundFreight) *
+      (Number(line.qty) || 1)
+    );
   }
 
   const advertisingFeePercent =
@@ -4198,7 +4215,17 @@ function minimumProfitAmountTotal(){
 
     const qty = Number(line.qty) || 1;
 
-    return sum + (money(line.item.MinimumProfitAmount) * qty);
+    const inventoryMinimumProfit =
+      clean(line.inventoryRecord?.MinimumProfitAmount) !== ''
+        ? money(line.inventoryRecord.MinimumProfitAmount)
+        : 0;
+
+    const unitMinimumProfit =
+      inventoryMinimumProfit > 0
+        ? inventoryMinimumProfit
+        : money(line.item.MinimumProfitAmount);
+
+    return sum + (unitMinimumProfit * qty);
 
   }, 0);
 }
@@ -15264,18 +15291,74 @@ function inventorySku(value){
     .replace(/[^A-Z0-9]/g,'');
 }
 
-function availableInventoryRecordForSku(sku){
+function availableInventoryAllocationsForSku(sku, requestedQuantity){
   const wanted = inventorySku(sku);
-  const used = new Set(
-    state.cart
-      .map(line => clean(line.inventoryId).toUpperCase())
-      .filter(Boolean)
+  let remaining = Math.max(
+    Math.floor(Number(requestedQuantity) || 1),
+    0
   );
 
-  return state.inventory.find(record =>
-    inventorySku(record.SKU) === wanted &&
-    !used.has(clean(record.InventoryID).toUpperCase())
-  ) || null;
+  const usedByInventoryId = new Map();
+
+  state.cart.forEach(line => {
+    const inventoryId =
+      clean(line.inventoryId).toUpperCase();
+
+    if(!inventoryId) return;
+
+    usedByInventoryId.set(
+      inventoryId,
+      (
+        usedByInventoryId.get(inventoryId) || 0
+      ) +
+      (Number(line.qty) || 1)
+    );
+  });
+
+  const allocations = [];
+
+  state.inventory
+    .filter(record =>
+      inventorySku(record.SKU) === wanted
+    )
+    .forEach(record => {
+      if(remaining <= 0) return;
+
+      const inventoryId =
+        clean(record.InventoryID).toUpperCase();
+
+      if(!inventoryId) return;
+
+      const recordQuantity = Math.max(
+        Math.floor(Number(clean(record.Quantity)) || 1),
+        0
+      );
+
+      const availableQuantity = Math.max(
+        recordQuantity -
+        (usedByInventoryId.get(inventoryId) || 0),
+        0
+      );
+
+      const allocatedQuantity = Math.min(
+        availableQuantity,
+        remaining
+      );
+
+      if(allocatedQuantity <= 0) return;
+
+      allocations.push({
+        record,
+        quantity: allocatedQuantity
+      });
+
+      remaining -= allocatedQuantity;
+    });
+
+  return {
+    allocations,
+    remaining
+  };
 }
 
 function addToolToQuote(){
@@ -15289,33 +15372,54 @@ function addToolToQuote(){
   const tool = state.tools.find(t => skuOf(t) === sku);
   if(!tool) return;
 
-  const qty = Number($('stihl-tool-qty').value) || 1;
-  const inventoryRecord =
-    availableInventoryRecordForSku(sku);
+  const requestedQuantity = Math.min(
+    Math.max(
+      Math.floor(
+        Number($('stihl-tool-qty').value) || 1
+      ),
+      1
+    ),
+    100
+  );
 
-  addItem('tool', tool, qty, '');
-
-  if(inventoryRecord && qty === 1){
-    const line = state.cart.find(candidate =>
-      candidate.type === 'tool' &&
-      skuOf(candidate.item) === sku &&
-      !candidate.included
+  const allocation =
+    availableInventoryAllocationsForSku(
+      sku,
+      requestedQuantity
     );
 
-    if(line){
-      line.inventoryId =
-        clean(inventoryRecord.InventoryID);
-      line.inventoryRecord = inventoryRecord;
-    }
+  allocation.allocations.forEach(stock => {
+    addItem(
+      'tool',
+      tool,
+      stock.quantity,
+      'In-stock inventory pricing',
+      false,
+      true,
+      false,
+      '',
+      stock.record
+    );
+  });
+
+  if(allocation.remaining > 0){
+    addItem(
+      'tool',
+      tool,
+      allocation.remaining,
+      'Normal pricing',
+      false,
+      true
+    );
   }
 
-  addIncludedPackageComponents(tool, qty);
+  addRequiredItems(tool, requestedQuantity);
+  addIncludedPackageComponents(tool, requestedQuantity);
 
   renderDeliveryOptions();
   renderAttachmentOptions();
   renderCart();
 }
-
 function addIncludedPackageComponents(tool, parentQty){
 
   const packageRow = tool?.PackageRow;
@@ -17611,7 +17715,7 @@ function addRequiredItems(parentItem, parentQty){
   requiredNumbers.forEach(addRequirementBranch);
 }
 
-    function addItem(type,item,qty,note,included,skipRequired,requiredItem,parentSku){
+    function addItem(type,item,qty,note,included,skipRequired,requiredItem,parentSku,inventoryRecord){
   qty = Number(qty) || 1;
 
   if(isThirdFunctionItem(item)){
@@ -17626,14 +17730,19 @@ function addRequiredItems(parentItem, parentQty){
     qty = Math.min(qty, remaining);
   }
 
+  const inventoryId =
+    clean(inventoryRecord?.InventoryID);
+
   const key =
-  type +
-  '|' +
-  skuOf(item) +
-  '|' +
-  (included ? 'included' : '') +
-  '|' +
-  clean(parentSku);
+    type +
+    '|' +
+    skuOf(item) +
+    '|' +
+    (included ? 'included' : '') +
+    '|' +
+    clean(parentSku) +
+    '|' +
+    inventoryId;
   const existing = state.cart.find(x => x.key === key);
 
   if(existing){
@@ -17652,6 +17761,8 @@ function addRequiredItems(parentItem, parentQty){
   included: !!included,
   requiredItem: !!requiredItem,
     parentSku: parentSku || '',
+  inventoryId,
+  inventoryRecord: inventoryRecord || null,
   actualFreightCost: '',
   setupSelected:
     assemblyOptionIsValid(item) &&
