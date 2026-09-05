@@ -110,6 +110,43 @@
   font-size:14px;
   font-weight:800;
 }
+
+.stihl-more-actions{
+  position:relative;
+  flex:0 1 190px;
+}
+
+.stihl-more-actions > summary{
+  list-style:none;
+  width:100%;
+  box-sizing:border-box;
+}
+
+.stihl-more-actions > summary::-webkit-details-marker{
+  display:none;
+}
+
+.stihl-more-actions-menu{
+  position:absolute;
+  right:0;
+  bottom:calc(100% + 7px);
+  z-index:40;
+  min-width:230px;
+  padding:8px;
+  border:1px solid #d7d7d7;
+  border-radius:10px;
+  background:#fff;
+  box-shadow:0 10px 24px rgba(0,0,0,.16);
+}
+
+.stihl-more-actions-menu .stihl-btn{
+  width:100%;
+  margin:0 0 7px;
+}
+
+.stihl-more-actions-menu .stihl-btn:last-child{
+  margin-bottom:0;
+}
   .stihl-series-buttons{
   display:flex;
   gap:8px;
@@ -1630,21 +1667,27 @@ body.dealer-mode .dealer-only{
 </div>
 
           <div class="stihl-btn-row">
-            <button class="stihl-btn secondary" id="stihl-view-quote" type="button">
-  View / Print Quote
-</button>
+  <button class="stihl-btn secondary" id="stihl-view-quote" type="button">
+    Review Quote
+  </button>
 
-<button class="stihl-btn light dealer-only" id="stihl-dealer-print" type="button">
-  Print Dealer Worksheet
-</button>
-<button class="stihl-btn light" id="stihl-email-quote" type="button">
-  Confirm Price & Availability
-</button>
-<button class="stihl-btn danger" id="stihl-clear" type="button">Clear</button>
+  <button class="stihl-btn light" id="stihl-email-quote" type="button">
+    Confirm Availability
+  </button>
 
-          </div>
-
-          <p class="stihl-small">Prices, compatibility, availability, promotions, and estimated run times should be verified before final sale.</p>
+  <details class="stihl-more-actions">
+    <summary class="stihl-btn light">More Actions &#9662;</summary>
+    <div class="stihl-more-actions-menu">
+      <button class="stihl-btn light dealer-only" id="stihl-dealer-print" type="button">
+        Dealer Worksheet
+      </button>
+      <button class="stihl-btn danger" id="stihl-clear" type="button">
+        Clear Configuration
+      </button>
+    </div>
+  </details>
+</div>
+<p class="stihl-small">Prices, compatibility, availability, promotions, and estimated run times should be verified before final sale.</p>
         </section>
         <!-- =========================================================
              SECTION END: QUOTE SUMMARY
@@ -7519,6 +7562,10 @@ const quoteData = {
 
     manufacturerCostDiscount:
       manufacturerCostDiscountAmount(),
+
+    inventorySelections:
+      inventoryConfirmationDetails(),
+
 
     dealerFinancials: {
       dealerCost: money($('stihl-dealer-cost-display')?.textContent),
@@ -14939,8 +14986,103 @@ const toolBrand =
   /* Protected API eligibility is authoritative. */
   return true;
 }
+function inventoryConfirmationDetails(){
 
-     async function emailQuote(){
+  return state.cart
+    .filter(line => clean(line.inventoryId))
+    .map(line => {
+
+      const record =
+        line.inventoryRecord ||
+        state.inventory.find(candidate =>
+          clean(candidate.InventoryID).toUpperCase() ===
+          clean(line.inventoryId).toUpperCase()
+        );
+
+      if(!record) return null;
+
+      const includedEquipment = [];
+
+      for(let number = 1; number <= 3; number++){
+
+        const includedInventoryId =
+          clean(record[`IncludedInventoryID${number}`]);
+
+        if(!includedInventoryId) continue;
+
+        const includedRecord =
+          state.inventory.find(candidate =>
+            clean(candidate.InventoryID).toUpperCase() ===
+            includedInventoryId.toUpperCase()
+          );
+
+        includedEquipment.push({
+          inventoryId: includedInventoryId,
+          sku: clean(includedRecord?.SKU),
+          description:
+            clean(includedRecord?.Description) ||
+            clean(includedRecord?.SKU) ||
+            includedInventoryId,
+          quantity: Math.max(
+            Number(
+              clean(record[`IncludedInventoryID${number}Qty`])
+            ) || 1,
+            1
+          ),
+          serialNumber: clean(includedRecord?.SerialNumber),
+          store: clean(includedRecord?.Store),
+          status: clean(includedRecord?.Status)
+        });
+      }
+
+      return {
+        inventoryId: clean(record.InventoryID),
+        sku: clean(record.SKU) || skuOf(line.item),
+        description:
+          clean(record.Description) ||
+          nameOf(line.item),
+        quantity: Math.max(Number(line.qty) || 1, 1),
+        quantityAvailableAtPrice: Math.max(
+          Number(clean(record.Quantity)) || 1,
+          1
+        ),
+        serialNumber: clean(record.SerialNumber),
+        store: clean(record.Store),
+        status: clean(record.Status),
+        includedEquipment
+      };
+    })
+    .filter(Boolean);
+}
+
+function inventoryConfirmationAlert(details){
+
+  if(!details.length) return '';
+
+  return details
+    .map(detail => {
+
+      const included =
+        detail.includedEquipment.length
+          ? '\nIncluded equipment: ' +
+            detail.includedEquipment
+              .map(item =>
+                `${item.description} (${item.sku})` +
+                (item.quantity > 1 ? ` x ${item.quantity}` : '')
+              )
+              .join(', ')
+          : '';
+
+      return (
+        `In-stock unit requested: ${detail.description} (${detail.sku})` +
+        included +
+        `\nQuantity available at this price: ${detail.quantityAvailableAtPrice}`
+      );
+    })
+    .join('\n\n');
+}
+
+async function emailQuote(){
 
   const result =
     await sendQuoteLead(
@@ -14955,9 +15097,15 @@ const toolBrand =
     return;
   }
 
+  const inventoryNotice =
+    inventoryConfirmationAlert(
+      inventoryConfirmationDetails()
+    );
+
   alert(
     'Thank you.\n\n' +
     'Your request has been submitted to West End Power.\n\n' +
+    (inventoryNotice ? inventoryNotice + '\n\n' : '') +
     'A sales representative will review pricing, inventory availability, promotions, delivery options and financing programs and contact you shortly.'
   );
 
@@ -14999,6 +15147,7 @@ async function sendQuoteLead(actionType){
     configurator: configuratorBrandId(),
     source: `${configuratorBrandName()} Equipment Configurator`,
     action: actionType || 'Confirm Price & Availability',
+    inventorySelections:inventoryConfirmationDetails(),
 
     salesperson: clean($('stihl-salesperson')?.value),
 
