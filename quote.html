@@ -1805,9 +1805,33 @@ async function syncDealerQuoteState(){
                   name:
                     itemName(line.item),
 
+                  price:
+                    money(line.originalLineTotal) /
+                    (Number(line.qty) || 1),
+
+                  originalLineTotal:
+                    money(line.originalLineTotal),
+
+                  msrpLineTotal:
+                    money(line.originalLineTotal),
+
+                  finalLineTotal:
+                    money(line.finalLineTotal),
+
                   lineTotal:
-                    money(
-                      line.finalLineTotal
+                    money(line.finalLineTotal),
+
+                  paymentDiscount:
+                    money(line.paymentDiscount),
+
+                  factoryRebate:
+                    money(line.factoryRebate),
+
+                  totalDiscount:
+                    Math.max(
+                      money(line.originalLineTotal) -
+                      money(line.finalLineTotal),
+                      0
                     )
                 })),
 
