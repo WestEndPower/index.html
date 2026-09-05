@@ -1732,7 +1732,7 @@ const state = {
   inventoryAvailability: null,
   selectedTool: null,
   selectedSystemButton: '',
-  selectedPowerButton: '',
+  selectedPowerButton: 'STOCK',
   activeFinancingSelector: '',
   cart: []
 };
@@ -6515,18 +6515,21 @@ if($('stihl-bid-program-select')){
       $('stihl-search').addEventListener('input', renderTools);
 $('stihl-category').addEventListener('change', () => {
   state.selectedSystemButton = '';
+  state.selectedPowerButton = 'STOCK';
   state.selectedTool = null;
   $('stihl-tool-select').value = '';
-  updateSystemButtonVisibility();
+  renderPowerButtons();
   renderTools();
   renderToolDetails();
   renderAllOptions();
   renderKMARuntimeMatrix();
 });
 
- // POWER TYPE BUTTONS
-document.querySelectorAll('#stihl-power-buttons .stihl-series-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
+// STOCK / POWER TYPE BUTTONS
+if($('stihl-power-buttons')){
+  $('stihl-power-buttons').addEventListener('click', event => {
+    const btn = event.target.closest('.stihl-series-btn');
+    if(!btn) return;
 
     document.querySelectorAll('#stihl-power-buttons .stihl-series-btn')
       .forEach(b => b.classList.remove('active'));
@@ -6544,7 +6547,7 @@ document.querySelectorAll('#stihl-power-buttons .stihl-series-btn').forEach(btn 
     renderAllOptions();
     renderKMARuntimeMatrix();
   });
-});
+}
 
 if($('stihl-system-buttons')){
   $('stihl-system-buttons').addEventListener('click', event => {
@@ -7850,18 +7853,27 @@ function renderCategories(){
 
     function renderPowerButtons(){
 
+  const category = clean($('stihl-category')?.value);
+
   const preferredPowerOrder = [
-    'Diesel',
     'Gas',
-    'Electric',
-    'Battery'
+    'Battery',
+    'Electric'
   ];
+
+  const categoryTools = state.tools.filter(tool =>
+    !category || clean(tool.Category) === category
+  );
 
   const availablePowers = [
     ...new Set(
-      state.tools
+      categoryTools
         .map(tool => clean(tool.PowerType))
-        .filter(Boolean)
+        .filter(power =>
+          preferredPowerOrder.some(preferred =>
+            preferred.toUpperCase() === power.toUpperCase()
+          )
+        )
     )
   ];
 
@@ -7883,42 +7895,33 @@ function renderCategories(){
     return a.localeCompare(b);
   });
 
-  const hasCurrentPromotions =
-    state.tools.some(tool =>
-      toolHasCurrentPromotion(tool)
-    );
+  const validPowerFilters = [
+    'STOCK',
+    ...powers.map(power => power.toUpperCase())
+  ];
+
+  if(!validPowerFilters.includes(state.selectedPowerButton.toUpperCase())){
+    state.selectedPowerButton = 'STOCK';
+  }
 
   $('stihl-power-buttons').innerHTML =
     `
       <button
         type="button"
-        class="stihl-series-btn active"
-        data-power="">
-        All Equipment
+        class="stihl-series-btn ${state.selectedPowerButton === 'STOCK' ? 'active' : ''}"
+        data-power="STOCK">
+        In Stock
       </button>
     ` +
 
     powers.map(power => `
       <button
         type="button"
-        class="stihl-series-btn"
+        class="stihl-series-btn ${state.selectedPowerButton.toUpperCase() === power.toUpperCase() ? 'active' : ''}"
         data-power="${power}">
         ${power}
       </button>
-    `).join('') +
-
-    (
-      hasCurrentPromotions
-        ? `
-          <button
-            type="button"
-            class="stihl-series-btn"
-            data-power="PROMOTIONS">
-            Current Promotions
-          </button>
-        `
-        : ''
-    );
+    `).join('');
 
   updateSystemButtonVisibility();
 }
@@ -7938,7 +7941,11 @@ function updateSystemButtonVisibility(){
   let allLabel = '';
   let filterField = 'Series';
 
-  if(categoryKey.includes('COMPACT TRACTOR')){
+  if(state.selectedPowerButton.toUpperCase() === 'BATTERY'){
+    preferredSeries = ['AS','AK','AP','AR'];
+    allLabel = 'All Battery Systems';
+    filterField = 'System';
+  }else if(categoryKey.includes('COMPACT TRACTOR')){
     preferredSeries = ['SA','YT','YM','SM'];
     allLabel = 'All Compact Tractors';
     filterField = 'System';
@@ -7956,7 +7963,13 @@ function updateSystemButtonVisibility(){
 
   const availableSeries = new Set(
     state.tools
-      .filter(tool => clean(tool.Category).toUpperCase() === categoryKey)
+      .filter(tool =>
+        (!categoryKey || clean(tool.Category).toUpperCase() === categoryKey) &&
+        (
+          state.selectedPowerButton.toUpperCase() !== 'BATTERY' ||
+          clean(tool.PowerType).toUpperCase() === 'BATTERY'
+        )
+      )
       .map(tool => clean(tool[filterField]).toUpperCase())
       .filter(Boolean)
   );
@@ -8013,7 +8026,8 @@ function renderTools(){
     );
 
   const categoryUsesSystemFilter =
-    category.toUpperCase().includes('COMPACT TRACTOR');
+    category.toUpperCase().includes('COMPACT TRACTOR') ||
+    power.toUpperCase() === 'BATTERY';
 
   const list =
     state.tools.filter(tool => {
@@ -8029,7 +8043,13 @@ function renderTools(){
         Current Promotions is a special filter.
         Otherwise match the normal PowerType.
       */
-      if(power === 'PROMOTIONS'){
+      if(power === 'STOCK'){
+
+        if(!onlineItemInStock(tool)){
+          return false;
+        }
+
+      }else if(power === 'PROMOTIONS'){
 
         if(!toolHasCurrentPromotion(tool)){
           return false;
