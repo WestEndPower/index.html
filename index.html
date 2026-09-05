@@ -4056,13 +4056,33 @@ function westEndPowerDiscountForLine(line){
     return 0;
   }
 
+  /*
+    The protected API calculates one discount for the complete cart.
+    Apply it only once to the first primary merchandise line so carts
+    containing duplicate or different SKUs cannot count it repeatedly.
+  */
+  const primaryLine =
+    state.cart.find(candidate =>
+      candidate &&
+      candidate.item &&
+      !candidate.included &&
+      !candidate.requiredItem
+    ) ||
+    state.cart.find(candidate =>
+      candidate &&
+      candidate.item &&
+      !candidate.included
+    );
+
+  if(line !== primaryLine){
+    return 0;
+  }
+
   const serverPricing =
     publicServerPricingForLine(line);
 
   return serverPricing
-    ? money(
-        serverPricing.automaticDiscount
-      )
+    ? money(serverPricing.automaticDiscount)
     : 0;
 }
 
