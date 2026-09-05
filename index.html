@@ -2659,6 +2659,238 @@ rows.forEach((row, index) => {
 return rows;
 }
 
+function bareToolForPackageItem(kitItem){
+  const kitSku = tightSku(skuOf(kitItem));
+  const kitModel = clean(kitItem?.Model).toUpperCase();
+
+  return (state.tools || []).find(candidate => {
+    if(!candidate || tightSku(skuOf(candidate)) === kitSku) return false;
+
+    return kitModel &&
+      clean(candidate.Model).toUpperCase() === kitModel &&
+      clean(candidate.ProductType).toUpperCase() === 'TOOL' &&
+      !candidate.PackageRow;
+  }) || null;
+}
+
+function packagePricingComponents(line){
+  const kitQty = Math.max(Number(line?.qty) || 1, 1);
+  const packageRow = line?.item?.PackageRow;
+
+  if(packageRow){
+    const toolItem = bareToolForPackageItem(line.item);
+    if(!toolItem) return [];
+
+    const components = [{
+      item: toolItem,
+      qty: kitQty,
+      fallbackCode: skuOf(toolItem),
+      componentType: 'tool'
+    }];
+
+    [
+      { prefix: 'Battery', type: 'battery', list: state.batteries, max: 3 },
+      { prefix: 'Charger', type: 'charger', list: state.chargers, max: 3 }
+    ].forEach(group => {
+      for(let i = 1; i <= group.max; i++){
+        const componentSku = clean(packageRow[`${group.prefix}SKU${i}`]);
+        if(!componentSku) continue;
+
+        const record = findPackageComponentRecord(
+          componentSku,
+          group.type,
+          group.list
+        );
+
+        components.push({
+          item: record?.item || null,
+          qty: (Number(packageRow[`${group.prefix}Qty${i}`]) || 1) * kitQty,
+          fallbackCode: componentSku,
+          componentType: group.type
+        });
+      }
+    });
+
+    return components;
+  }
+
+  const legacyKit = parseKitComponentsFromStihlID(skuOf(line?.item));
+  if(!legacyKit) return [];
+
+  const toolItem = findBareToolForKitCode(legacyKit.toolCode);
+  if(!toolItem) return [];
+
+  return [{
+    item: toolItem,
+    qty: kitQty,
+    fallbackCode: legacyKit.toolCode,
+    componentType: 'tool'
+  }].concat(legacyKit.components.map(code => {
+    const item = findComponentByCode(code);
+    return {
+      item,
+      qty: kitQty,
+      fallbackCode: code,
+      componentType: (state.chargers || []).includes(item)
+        ? 'charger'
+        : 'battery'
+    };
+  }));
+}
+
+function kitComponentPricingRows(line, requestedKitTotal = null){
+  const components = packagePricingComponents(line);
+  if(!components.length) return [];
+
+  const kitQty = Math.max(Number(line.qty) || 1, 1);
+  const kitTargetTotal = requestedKitTotal === null
+    ? priceOf(line.item) * kitQty
+    : Math.max(money(requestedKitTotal), 0);
+
+  const rows = components.map(component => {
+    const item = component.item || {};
+    return {
+      item: component.item || null,
+      qty: component.qty,
+      stihlId: clean(item.StihlID) || skuOf(item) || clean(component.fallbackCode),
+      desc: clean(item.Description) || nameOf(item) || clean(component.fallbackCode),
+      msrp: money(item.MSRP),
+      discount: 0,
+      salePrice: 0,
+      lineTotal: 0,
+      actualCost: 0,
+      componentType: component.componentType,
+      isTool: component.componentType === 'tool',
+      isCharger: component.componentType === 'charger'
+    };
+  });
+
+  const standaloneListTotal = components.reduce((sum, component) =>
+    sum + money(component.item?.MSRP) * component.qty,
+  0);
+
+  const standaloneDealerCostTotal = components.reduce((sum, component) =>
+    sum + effectiveDealerCostOf(component.item) * component.qty,
+  0);
+
+  const toolRows = rows.filter(row => row.componentType === 'tool');
+  const batteryRows = rows.filter(row => row.componentType === 'battery');
+  const chargerRows = rows.filter(row => row.componentType === 'charger');
+
+  toolRows.forEach(row => {
+    row.salePrice = row.msrp;
+    row.lineTotal = row.salePrice * row.qty;
+    row.discount = 0;
+  });
+
+  const toolTotal = toolRows.reduce((sum, row) => sum + row.lineTotal, 0);
+  let remaining = Math.max(kitTargetTotal - toolTotal, 0);
+  let pricingConflict =
+    components.some(component => !component.item) ||
+    toolTotal > kitTargetTotal + 0.005;
+
+  const batteryUnitCount = batteryRows.reduce((sum, row) => sum + row.qty, 0);
+  if(batteryUnitCount > 0){
+    const batteryListCap = batteryRows.reduce(
+      (cap, row) => Math.min(cap, Math.floor(Math.max(row.msrp, 0))),
+      Number.POSITIVE_INFINITY
+    );
+    const batteryUnitPrice = Math.max(
+      Math.min(Math.floor(remaining / batteryUnitCount), batteryListCap),
+      0
+    );
+
+    batteryRows.forEach(row => {
+      row.salePrice = batteryUnitPrice;
+      row.lineTotal = batteryUnitPrice * row.qty;
+      row.discount = Math.max(row.msrp - row.salePrice, 0);
+    });
+    remaining = Math.max(remaining - batteryUnitPrice * batteryUnitCount, 0);
+  }
+
+  const chargerUnitCount = chargerRows.reduce((sum, row) => sum + row.qty, 0);
+  if(chargerUnitCount > 0){
+    const chargerListCap = chargerRows.reduce(
+      (cap, row) => Math.min(cap, Math.floor(Math.max(row.msrp, 0))),
+      Number.POSITIVE_INFINITY
+    );
+    const chargerUnitPrice = Math.max(
+      Math.min(Math.floor(remaining / chargerUnitCount), chargerListCap),
+      0
+    );
+
+    chargerRows.forEach(row => {
+      row.salePrice = chargerUnitPrice;
+      row.lineTotal = chargerUnitPrice * row.qty;
+      row.discount = Math.max(row.msrp - row.salePrice, 0);
+    });
+    remaining = Math.max(remaining - chargerUnitPrice * chargerUnitCount, 0);
+  }
+
+  const displayedTotal = rows.reduce((sum, row) => sum + row.lineTotal, 0);
+  if(displayedTotal > kitTargetTotal + 0.005 || remaining >= 0.995){
+    pricingConflict = true;
+  }
+
+  const kitActualCost = effectiveDealerCostOf(line.item) * kitQty;
+
+  toolRows.forEach(row => {
+    const component = components[rows.indexOf(row)];
+    row.allocatedUnitCost = effectiveDealerCostOf(component.item);
+    row.actualCost = row.allocatedUnitCost * row.qty;
+  });
+
+  const toolCostTotal = toolRows.reduce((sum, row) => sum + row.actualCost, 0);
+  let remainingCost = Math.max(kitActualCost - toolCostTotal, 0);
+  let costConflict = toolCostTotal > kitActualCost + 0.005;
+
+  function allocateEqualComponentCost(targetRows){
+    const unitCount = targetRows.reduce((sum, row) => sum + row.qty, 0);
+    if(!unitCount) return;
+
+    const unitCostCap = targetRows.reduce((cap, row) => {
+      const component = components[rows.indexOf(row)];
+      return Math.min(cap, effectiveDealerCostOf(component.item));
+    }, Number.POSITIVE_INFINITY);
+
+    const unitCost = Math.max(
+      Math.min(remainingCost / unitCount, unitCostCap),
+      0
+    );
+
+    targetRows.forEach(row => {
+      row.actualCost = unitCost * row.qty;
+      row.allocatedUnitCost = unitCost;
+    });
+    remainingCost = Math.max(remainingCost - unitCost * unitCount, 0);
+  }
+
+  allocateEqualComponentCost(batteryRows);
+  allocateEqualComponentCost(chargerRows);
+
+  if(remainingCost >= 0.005){
+    costConflict = true;
+  }
+
+  rows.pricingConflict = pricingConflict;
+  rows.costConflict = costConflict;
+  rows.unallocatedAmount = remaining;
+  rows.unallocatedCost = remainingCost;
+  rows.kitTargetTotal = kitTargetTotal;
+  rows.kitListTotal = money(line.item.MSRP) * kitQty;
+  rows.standaloneListTotal = standaloneListTotal;
+  rows.standaloneDealerCostTotal = standaloneDealerCostTotal;
+  rows.customerIndividualSavings = Math.max(
+    rows.kitListTotal - standaloneListTotal,
+    0
+  );
+  rows.dealerOrderSavings = Math.max(
+    kitActualCost - standaloneDealerCostTotal,
+    0
+  );
+  return rows;
+}
+
 function bidFleetDealerPrintHtml(){
 
   const bidFleet = bidFleetEngine();
@@ -2860,7 +3092,13 @@ function dealerKitBreakdownPrintHtml(){
       printBidFleetDiscountAmount(line);
 
     const kitRows =
-      kitBreakdownRows(line, fleetDiscount);
+      kitComponentPricingRows(
+        line,
+        Math.max(
+          (priceOf(line.item) * (Number(line.qty) || 1)) - fleetDiscount,
+          0
+        )
+      );
 
     if(!kitRows.length){
       return;
@@ -2871,6 +3109,12 @@ function dealerKitBreakdownPrintHtml(){
         <div style="background:#1f7a3a;color:#fff;padding:8px 12px;font-size:15px;font-weight:900;">
           Dealer Kit Breakdown — ${escapeHtml(clean(line.item.Model) || skuOf(line.item))}
         </div>
+
+        ${kitRows.dealerOrderSavings > 0.005 ? `
+          <div style="background:#fff8e8;color:#714300;border-bottom:2px solid #b36b00;padding:7px 10px;font-size:11px;font-weight:900;">
+            Dealer cost warning: Order the components individually and save ${fmtMoney(kitRows.dealerOrderSavings)} in dealer cost.
+          </div>
+        ` : ''}
 
         <table style="width:100%;border-collapse:collapse;font-size:10.5px;">
           <thead>
@@ -7379,7 +7623,7 @@ const manualCustomerDiscount =
   );
 
 const quoteLines =
-      visibleCartLines.map(line => {
+      visibleCartLines.flatMap(line => {
 
         const qty =
           Number(line.qty) || 1;
@@ -7455,6 +7699,73 @@ const lineTotalDiscount =
   lineManualCustomerDiscount +
   lineBidFleetDiscount;
 
+const finalLineTotal = Math.max(
+  originalLineTotal - lineTotalDiscount,
+  0
+);
+
+const componentRows = !line.included
+  ? kitComponentPricingRows(line, finalLineTotal)
+  : [];
+
+if(componentRows.length){
+  return componentRows.map((componentRow, componentIndex) => {
+    const componentOriginalTotal = componentRow.msrp * componentRow.qty;
+    const componentTotalDiscount = Math.max(
+      componentOriginalTotal - componentRow.lineTotal,
+      0
+    );
+    const finalShare = finalLineTotal > 0
+      ? componentRow.lineTotal / finalLineTotal
+      : 0;
+
+    return {
+      type: componentRow.componentType,
+      qty: componentRow.qty,
+      inventoryId: componentIndex === 0 ? clean(line.inventoryId) : '',
+      inventorySerial: componentIndex === 0
+        ? clean(line.inventoryRecord?.SerialNumber)
+        : '',
+      inventoryStore: componentIndex === 0
+        ? clean(line.inventoryRecord?.Store)
+        : '',
+      included: false,
+      setupSelected: componentIndex === 0 && !!line.setupSelected,
+      actualFreightCost: componentIndex === 0
+        ? lineActualFreightCost(line)
+        : 0,
+      customerFreightCharge: componentIndex === 0
+        ? automaticBrandPackageFreight(line)
+        : 0,
+      packageParentSKU: skuOf(line.item),
+      packageParentDescription: nameOf(line.item),
+      item: {
+        ...(componentRow.item || {}),
+        DealerCost: componentRow.allocatedUnitCost,
+        SaleDealerCost: '',
+        MSRP: componentRow.msrp,
+        SalePrice: componentRow.salePrice
+      },
+      originalLineTotal: componentOriginalTotal,
+      lineDiscount: componentTotalDiscount,
+      paymentDiscount: linePaymentDiscount * finalShare,
+      factoryRebate: lineFactoryRebate * finalShare,
+      manualCustomerDiscount: lineManualCustomerDiscount * finalShare,
+      bidFleetDiscount: lineBidFleetDiscount * finalShare,
+      bidFleetProgramType: clean(
+        quoteBidFleet.program?.ProgramType
+      ).toLowerCase(),
+      bidFleetTier: clean(quoteBidFleet.tier),
+      bidFleetProgramName: clean(quoteBidFleet.program?.ProgramName),
+      totalDiscount: componentTotalDiscount,
+      finalLineTotal: componentRow.lineTotal,
+      allocatedDealerCost: componentRow.actualCost,
+      allocatedUnitDealerCost: componentRow.allocatedUnitCost,
+      componentProfit: componentRow.lineTotal - componentRow.actualCost
+    };
+  });
+}
+
 return {
           type: line.type,
           qty,
@@ -7505,11 +7816,7 @@ totalDiscount:
   lineTotalDiscount,
 
 finalLineTotal:
-  Math.max(
-    originalLineTotal -
-    lineTotalDiscount,
-    0
-  )
+  finalLineTotal
         };
 
       });
@@ -10398,6 +10705,8 @@ const printFinanceProgram =
       `
       : '';
 
+  const customerKitPricingNotices = [];
+
   const quoteItems = state.cart
     .filter(line => !line.included)
     .map(line => {
@@ -10475,6 +10784,27 @@ const unitDiscount =
 const unitYourPrice =
   customerLineTotal / qty;
 
+const customerKitRows = !isDealer
+  ? kitComponentPricingRows(line, customerLineTotal)
+  : [];
+
+const customerKitMappingIssue =
+  !isDealer &&
+  line.item.PackageRow &&
+  !customerKitRows.length;
+
+if(customerKitRows.pricingConflict || customerKitMappingIssue){
+  customerKitPricingNotices.push(
+    `${clean(line.item.Model) || stihlId}: Kit pricing could not be allocated evenly in whole dollars without exceeding the advertised kit price. Order the tool, battery, and charger as individual components or contact West End Power Equipment for assistance.`
+  );
+}
+
+if(customerKitRows.customerIndividualSavings > 0.005){
+  customerKitPricingNotices.push(
+    `${clean(line.item.Model) || stihlId}: Buy the tool, battery, and charger individually and save ${fmtMoney(customerKitRows.customerIndividualSavings)} compared with this kit.`
+  );
+}
+
 /*
   Dealer profit includes manufacturer or
   Bid/Fleet reimbursement received by the dealer.
@@ -10521,7 +10851,16 @@ return isDealer ? `
     <td colspan="6"></td>
   </tr>
 ` : ''}
-` : `
+` : customerKitRows.length ? customerKitRows.map(row => `
+  <tr>
+    <td>${row.qty}</td>
+    <td>${escapeHtml(row.desc)}</td>
+    <td>${escapeHtml(row.stihlId)}</td>
+    <td style="text-align:right;">${fmtMoney(row.msrp * row.qty)}</td>
+    <td style="text-align:right;">${fmtMoney(row.discount * row.qty)}</td>
+    <td style="text-align:right;font-weight:800;">${row.lineTotal > 0 ? fmtMoney(row.lineTotal) : 'N/C'}</td>
+  </tr>
+`).join('') : `
   <tr>
     <td>${qty}</td>
 
@@ -10724,6 +11063,12 @@ return isDealer ? `
         </thead>
         <tbody>${quoteItems}</tbody>
       </table>
+
+      ${!isDealer && customerKitPricingNotices.length ? `
+        <div style="margin-top:8px;border:2px solid #b00020;background:#fff4f4;color:#7a0015;padding:8px 10px;font-size:11px;font-weight:700;page-break-inside:avoid;">
+          ${customerKitPricingNotices.map(notice => `<div>${escapeHtml(notice)}</div>`).join('')}
+        </div>
+      ` : ''}
 
       ${isDealer ? `
   <div style="
@@ -15221,14 +15566,35 @@ rebateEndDate: rebateEndDate(),
     tax: $('stihl-tax')?.textContent,
     total: $('stihl-total')?.textContent,
     selectedTool: state.selectedTool ? nameOf(state.selectedTool) : '',
-    items: state.cart.map(line => ({
-      qty: line.qty,
-      name: nameOf(line.item),
-      price: line.included ? 'Included' : fmtMoney(priceOf(line.item)),
-      lineTotal: line.included
-        ? 'Included'
-        : fmtMoney(priceOf(line.item) * line.qty)
-    }))
+    items: state.cart.flatMap(line => {
+      if(line.included) return [];
+
+      const componentRows = kitComponentPricingRows(
+        line,
+        priceOf(line.item) * (Number(line.qty) || 1)
+      );
+
+      if(componentRows.length){
+        return componentRows.map(row => ({
+          qty: row.qty,
+          sku: row.stihlId,
+          name: row.desc,
+          price: row.lineTotal > 0 ? fmtMoney(row.salePrice) : 'N/C',
+          lineTotal: row.lineTotal > 0 ? fmtMoney(row.lineTotal) : 'N/C',
+          dealerCost: fmtMoney(row.allocatedUnitCost),
+          profit: fmtMoney(row.lineTotal - row.actualCost),
+          packageParentSKU: skuOf(line.item)
+        }));
+      }
+
+      return [{
+        qty: line.qty,
+        sku: skuOf(line.item),
+        name: nameOf(line.item),
+        price: fmtMoney(priceOf(line.item)),
+        lineTotal: fmtMoney(priceOf(line.item) * line.qty)
+      }];
+    })
   };
 
   try{
@@ -19404,6 +19770,22 @@ ${packageFreightNotice ? `
           `
           : '';
 
+      const visibleKitRows = !line.included
+        ? kitComponentPricingRows(line, packageFinalPrice)
+        : [];
+
+      const visibleKitPricingIssue =
+        !line.included &&
+        line.item.PackageRow &&
+        (
+          !visibleKitRows.length ||
+          visibleKitRows.pricingConflict ||
+          (
+            document.body.classList.contains('dealer-mode') &&
+            visibleKitRows.costConflict
+          )
+        );
+
       return `
         <div class="stihl-card" style="padding:8px 10px;margin:6px 0;">
 
@@ -19552,6 +19934,38 @@ ${packageFreightNotice ? `
   }
 
 </div>
+
+          ${visibleKitRows.length ? `
+            <div style="margin-top:7px;border-top:1px solid #ddd;padding-top:6px;font-size:11px;">
+              ${visibleKitRows.map(row => `
+                <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:2px 0;">
+                  <span>
+                    ${row.qty > 1 ? `${row.qty} × ` : ''}${escapeHtml(row.desc)}
+                    <span style="color:#777;">${escapeHtml(row.stihlId)}</span>
+                  </span>
+                  <strong>${row.lineTotal > 0 ? fmtMoney(row.lineTotal) : 'N/C'}</strong>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+
+          ${visibleKitRows.customerIndividualSavings > 0.005 ? `
+            <div style="margin-top:5px;border:2px solid #1f7a3a;background:#f3fbf5;color:#145626;padding:7px;font-size:12px;font-weight:900;">
+              Buy the tool, battery, and charger individually and save ${fmtMoney(visibleKitRows.customerIndividualSavings)}.
+            </div>
+          ` : ''}
+
+          ${document.body.classList.contains('dealer-mode') && visibleKitRows.dealerOrderSavings > 0.005 ? `
+            <div style="margin-top:5px;border:2px solid #b36b00;background:#fff8e8;color:#714300;padding:7px;font-size:11px;font-weight:900;">
+              Dealer cost warning: Order the components individually and save ${fmtMoney(visibleKitRows.dealerOrderSavings)} in dealer cost.
+            </div>
+          ` : ''}
+
+          ${visibleKitPricingIssue ? `
+            <div style="margin-top:5px;border:1px solid #b00020;background:#fff4f4;color:#7a0015;padding:6px;font-size:11px;font-weight:800;">
+              Kit pricing could not be allocated evenly in whole dollars without exceeding the advertised kit price. Order the tool, battery, and charger as individual components or contact West End Power Equipment for assistance.
+            </div>
+          ` : ''}
 
           ${replacementControls ? `
             <div style="margin-top:8px;">
