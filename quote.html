@@ -299,6 +299,7 @@ td{
   <button
     type="button"
     class="quote-btn"
+    id="quote-print-save"
     onclick="printCustomerDocument()">
     Print / Save
   </button>
@@ -309,13 +310,13 @@ td{
     <div id="quote-document-status" class="quote-status">Quote</div>
 
     <div class="dealer-document-tools dealer-panel dealer-screen-only">
-      <h3>Dealer Quote Controls</h3>
+      <h3>Dealer Actions</h3>
       <div style="display:flex;flex-wrap:wrap;gap:10px;">
         <button
           type="button"
           class="quote-btn"
           id="quote-convert-order">
-          Convert to Sales Order
+          Create Sales Order
         </button>
 
         <button
@@ -331,6 +332,25 @@ td{
           id="quote-sync-dashboard">
           Update Dashboard
         </button>
+
+        <a
+          class="quote-btn secondary"
+          href="https://westendpower-configurator-api.westendpower-nm.workers.dev/dashboard"
+          target="_blank"
+          rel="noopener noreferrer"
+          style="display:inline-flex;text-decoration:none;">
+          Dashboard
+        </a>
+
+        <a
+          class="quote-btn secondary"
+          id="quote-view-dashboard"
+          href="#"
+          target="_blank"
+          rel="noopener noreferrer"
+          style="display:none;text-decoration:none;">
+          View in Dashboard
+        </a>
       </div>
       <div
         id="quote-sync-dashboard-message"
@@ -674,14 +694,14 @@ td{
     </div>
 
     <div class="dealer-field" id="payment-card-type-wrap" style="display:none;">
-      <label for="payment-card-type">Card Type</label>
+      <label for="payment-card-type">Card Type / Processor</label>
       <select id="payment-card-type">
-        <option value="">Select Card Type</option>
-        <option value="Visa">Visa</option>
-        <option value="Mastercard">Mastercard</option>
-        <option value="Discover">Discover</option>
+        <option value="">Select Card Type / Processor</option>
         <option value="American Express">American Express</option>
-        <option value="Other">Other</option>
+        <option value="Discover">Discover</option>
+        <option value="Mastercard">Master Card</option>
+        <option value="Visa">Visa</option>
+        <option value="Stripe">Stripe</option>
       </select>
     </div>
 
@@ -725,6 +745,7 @@ td{
 <div class="dealer-cost-panel dealer-panel dealer-screen-only" id="dealer-cost-panel">
   <h3>Dealer Costs &amp; Profit</h3>
   <div id="dealer-cost-summary"></div>
+  <div id="dealer-inventory-allocation" style="display:none;margin-top:18px;"></div>
 </div>
 
 <div id="quote-notes-wrap" style="
@@ -1484,6 +1505,12 @@ const documentState = {
     clean(storedDocument.orderNumber) ||
     clean(savedSale.orderNumber),
 
+  dashboardUrl:
+    clean(storedDocument.dashboardUrl),
+
+  dashboardQuoteId:
+    Number(storedDocument.dashboardQuoteId) || 0,
+
   baseTotal:
     money(storedDocument.baseTotal) ||
     actualOutTheDoor,
@@ -1799,7 +1826,12 @@ async function syncDealerQuoteState(){
               },
 
               totals:
-                savedTotals
+                savedTotals,
+
+              inventorySelections:
+                Array.isArray(savedDocument.inventorySelections)
+                  ? savedDocument.inventorySelections
+                  : []
             }
           }),
 
@@ -1816,6 +1848,18 @@ async function syncDealerQuoteState(){
         result.error ||
         "Database update failed."
       );
+    }
+
+    if(result.dashboardUrl){
+      documentState.dashboardUrl =
+        new URL(
+          result.dashboardUrl,
+          CONFIGURATOR_API
+        ).href;
+      documentState.dashboardQuoteId =
+        Number(result.quoteId) || 0;
+      saveDocumentState();
+      renderDocumentState();
     }
 
     return true;
@@ -2432,6 +2476,8 @@ function renderPaymentHistory(){
 }
 
 function renderDealerCosts(){
+  renderDealerInventoryAllocation();
+
   const savedDealerFinancials =
     savedDocument.dealerFinancials &&
     typeof savedDocument.dealerFinancials === 'object'
@@ -2443,7 +2489,7 @@ function renderDealerCosts(){
 
     document.getElementById('dealer-cost-summary').innerHTML = `
       <div class="cost-summary-row"><span>Dealer Cost</span><strong>${fmtMoney(d.dealerCost)}</strong></div>
-      <div class="cost-summary-row"><span>Advertising Fee</span><strong>${fmtMoney(d.advertisingFee)}</strong></div>
+      <div class="cost-summary-row"><span>Advertising / RMF Fee</span><strong>${fmtMoney(d.advertisingFee)}</strong></div>
       <div class="cost-summary-row"><span>Internal Freight Cost</span><strong>${fmtMoney(d.internalFreightCost)}</strong></div>
       <div class="cost-summary-row"><span>True Dealer Cost</span><strong>${fmtMoney(d.trueDealerCost)}</strong></div>
       ${money(d.manufacturerCostDiscount) > 0 ? `<div class="cost-summary-row"><span>Manufacturer Cost Discount</span><strong>-${fmtMoney(d.manufacturerCostDiscount)}</strong></div>` : ''}
@@ -2534,6 +2580,83 @@ function renderDealerCosts(){
     <div class="cost-summary-row"><span>Financing Program Fees</span><strong>-${fmtMoney(financeFee)}</strong></div>
     <div class="cost-summary-row"><span>Gross Profit Before Payment Fees</span><strong>${fmtMoney(grossProfit)}</strong></div>
     <div class="cost-summary-row total"><span>Estimated Net Profit</span><strong>${fmtMoney(netProfit)}</strong></div>
+  `;
+}
+
+function renderDealerInventoryAllocation(){
+  const wrap = document.getElementById(
+    'dealer-inventory-allocation'
+  );
+
+  if(!wrap){
+    return;
+  }
+
+  const selections = Array.isArray(
+    savedDocument.inventorySelections
+  )
+    ? savedDocument.inventorySelections
+    : [];
+
+  const rows = selections.flatMap(selection => {
+    const parent = {
+      sku:clean(selection.sku),
+      description:clean(selection.description),
+      serialNumber:clean(selection.serialNumber),
+      quantity:Math.max(Number(selection.quantity) || 1, 1),
+      store:clean(selection.store),
+      status:clean(selection.status)
+    };
+
+    const included = Array.isArray(
+      selection.includedEquipment
+    )
+      ? selection.includedEquipment.map(item => ({
+          sku:clean(item.sku),
+          description:clean(item.description),
+          serialNumber:clean(item.serialNumber),
+          quantity:Math.max(Number(item.quantity) || 1, 1),
+          store:clean(item.store) || parent.store,
+          status:clean(item.status) || parent.status
+        }))
+      : [];
+
+    return [parent, ...included];
+  });
+
+  if(!rows.length){
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+    return;
+  }
+
+  wrap.style.display = '';
+  wrap.innerHTML = `
+    <h3 style="margin-bottom:8px;">Inventory Allocation</h3>
+    <table style="margin-top:0;">
+      <thead>
+        <tr>
+          <th>Equipment</th>
+          <th>SKU</th>
+          <th>Serial Number</th>
+          <th class="num">Qty</th>
+          <th>Store</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(row => `
+          <tr>
+            <td>${escapeHtml(row.description || row.sku)}</td>
+            <td>${escapeHtml(row.sku)}</td>
+            <td>${escapeHtml(row.serialNumber || 'Not recorded')}</td>
+            <td class="num">${escapeHtml(row.quantity)}</td>
+            <td>${escapeHtml(row.store || '—')}</td>
+            <td>${escapeHtml(row.status || '—')}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
   `;
 }
 
@@ -2712,12 +2835,24 @@ function renderDocumentState(){
     document.getElementById('quote-convert-order');
 
   if(convertButton){
-    convertButton.disabled =
-      !!documentState.orderNumber;
+    convertButton.style.display =
+      documentState.orderNumber ? 'none' : '';
     convertButton.textContent =
-      documentState.orderNumber
-        ? 'Sales Order Created'
-        : 'Convert to Sales Order';
+      'Create Sales Order';
+  }
+
+  const printSaveButton =
+    document.getElementById('quote-print-save');
+
+  if(printSaveButton){
+    printSaveButton.textContent =
+      !documentState.orderNumber
+        ? 'Print / Save Quote'
+        : balance <= 0.009
+          ? 'Print / Save Final Receipt'
+          : received > 0
+            ? 'Print / Save Updated Sales Order'
+            : 'Print / Save Sales Order';
   }
 
   const orderNumberControl =
@@ -2736,6 +2871,20 @@ function renderDocumentState(){
   const paidInFull =
     !!documentState.orderNumber &&
     balance <= 0.009;
+
+  const dashboardLink =
+    document.getElementById('quote-view-dashboard');
+
+  if(dashboardLink){
+    dashboardLink.style.display =
+      documentState.dashboardUrl ? 'inline-flex' : 'none';
+    dashboardLink.href =
+      documentState.dashboardUrl || '#';
+    dashboardLink.textContent =
+      paidInFull
+        ? 'View Sold Order'
+        : 'View in Dashboard';
+  }
 
   [
     'payment-date',
@@ -2858,10 +3007,10 @@ if(!receivedBy){
   }
 
   if(
-    ['credit-card','debit-card'].includes(methodKey) &&
+    methodKey === 'credit-card' &&
     !cardType
   ){
-    message.textContent = 'Select the card type.';
+    message.textContent = 'Select the card type or Stripe.';
     message.style.color = '#b00020';
     return;
   }
@@ -2874,7 +3023,10 @@ if(!receivedBy){
     amount,
     methodKey,
     method: paymentMethodLabel({methodKey}),
-    cardType,
+    cardType:
+      methodKey === 'credit-card'
+        ? cardType
+        : '',
     reference: clean(
       document.getElementById('payment-reference').value
     ),
@@ -2967,9 +3119,39 @@ function toggleDealerCosts(){
     : 'View Costs & Profit';
 }
 
-function printCustomerDocument(){
+async function printCustomerDocument(){
   hideDealerCosts();
   renderDocumentState();
+
+  if(dealerQuoteMode){
+    const saved = await syncDealerQuoteState();
+    if(!saved) return;
+  }
+
+  if(
+    dealerQuoteMode &&
+    documentState.dashboardUrl &&
+    documentState.dashboardQuoteId > 0
+  ){
+    const printUrl = new URL(
+      documentState.dashboardUrl,
+      window.location.href
+    );
+    printUrl.pathname = '/quotes';
+    printUrl.search = '';
+    printUrl.searchParams.set(
+      'id',
+      String(documentState.dashboardQuoteId)
+    );
+    printUrl.searchParams.set('print', '1');
+    window.open(
+      printUrl.toString(),
+      '_blank',
+      'noopener,noreferrer'
+    );
+    return;
+  }
+
   window.print();
 }
 
@@ -3014,9 +3196,15 @@ if(dealerQuoteMode){
     document.getElementById(
       'payment-card-type-wrap'
     ).style.display =
-      ['credit-card','debit-card'].includes(event.target.value)
+      event.target.value === 'credit-card'
         ? 'block'
         : 'none';
+
+    if(event.target.value !== 'credit-card'){
+      document.getElementById(
+        'payment-card-type'
+      ).value = '';
+    }
   });
 
   document.getElementById('payment-date').value =
